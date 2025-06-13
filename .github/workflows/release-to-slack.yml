@@ -17,7 +17,12 @@ jobs:
           URL: ${{ github.event.release.html_url }}
           RAW_BODY: ${{ github.event.release.body }}
         run: |
-          # Nettoyage Markdown : titres et puces
+          # Cancel automated sending if contains hotfix
+          if echo "$TITLE" | grep -iq "hotfix" || echo "$RAW_BODY" | grep -iq "hotfix"; then
+            echo "Mot-clé 'hotfix' détecté, annulation de l'envoi Slack."
+            exit 0
+          fi
+          # Transform markdown to Slack format
           CLEANED_BODY=$(echo "$RAW_BODY" \
             | sed -E 's/^### (.*)$/*\1*/' \
             | sed -E 's/^## (.*)$/*\1*/' \
@@ -26,15 +31,14 @@ jobs:
             | sed -E 's/\r//' \
           )
 
-          # Contenu Slack multilignes
-          SLACK_MESSAGE="🚀 *Nouvelle release publiée !*
+          SLACK_MESSAGE="🚀 *New release!*
 
-          ➡️ $TITLE ($TAG)
+          ➡️ $TITLE
           🔗 $URL
           
           $CLEANED_BODY"
 
-          # Générer le JSON
+          # Generate the JSON
           echo '{}' | jq --arg text "$SLACK_MESSAGE" '.text = $text' > payload.json
 
           cat payload.json
