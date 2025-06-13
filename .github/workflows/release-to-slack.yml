@@ -29,10 +29,10 @@ jobs:
           # Contenu Slack multilignes
           SLACK_MESSAGE="🚀 *Nouvelle release publiée !*
 
-➡️ $TITLE ($TAG)
-🔗 $URL
-
-$CLEANED_BODY"
+          ➡️ $TITLE ($TAG)
+          🔗 $URL
+          
+          $CLEANED_BODY"
 
           # Générer le JSON
           echo '{}' | jq --arg text "$SLACK_MESSAGE" '.text = $text' > payload.json
