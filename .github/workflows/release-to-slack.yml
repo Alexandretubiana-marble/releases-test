@@ -11,13 +11,12 @@ jobs:
       - name: Format and send Slack message
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          REPO: ${{ github.repository }}
           TAG: ${{ github.event.release.tag_name }}
           TITLE: ${{ github.event.release.name }}
           URL: ${{ github.event.release.html_url }}
           RAW_BODY: ${{ github.event.release.body }}
         run: |
-          # Nettoyage basique des titres Markdown
+          # Nettoyage Markdown : titres et puces
           CLEANED_BODY=$(echo "$RAW_BODY" \
             | sed -E 's/^### (.*)/*\1*/' \
             | sed -E 's/^## (.*)/*\1*/' \
@@ -26,10 +25,20 @@ jobs:
             | sed -E 's/\r//' \
           )
 
-          # Construire le JSON
-          echo '{}' | jq \
-            --arg text "🚀 *Nouvelle release publiée !*\n\n*$REPO*\n➡️ *$TITLE* ($TAG)\n🔗 $URL\n\n$CLEANED_BODY" \
-            '.text = $text' > payload.json
+          # Contenu Slack multilignes dans une variable
+          SLACK_MESSAGE=$(cat <<EOF
+🚀 *Nouvelle release publiée !*
+
+*$REPO*
+➡️ $TITLE ($TAG)
+🔗 $URL
+
+$CLEANED_BODY
+EOF
+          )
+
+          # Générer le JSON avec JQ
+          echo '{}' | jq --arg text "$SLACK_MESSAGE" '.text = $text' > payload.json
 
           cat payload.json
           curl -X POST -H 'Content-type: application/json' \
