@@ -9,9 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send release notification to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+          TITLE: ${{ github.event.release.name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
         run: |
+          echo '{}' | jq \
+            --arg text "🚀 *Nouvelle release publiée !*\n\n*$REPO*\n➡️ *$TITLE* ($TAG)\n🔗 $URL\n\n📝 $BODY" \
+            '.text = $text' > payload.json
+          
+          cat payload.json
           curl -X POST -H 'Content-type: application/json' \
-          --data "{
-            \"text\": \"🚀 *New release!*\n\n*${{ github.repository }}*\n➡️ *${{ github.event.release.name }}*\n🔗 ${{ github.event.release.html_url }}\n📝 ${{ github.event.release.body }}\"
-          }" \
-          ${{ secrets.SLACK_WEBHOOK_URL }}
+            --data @payload.json \
+            "$SLACK_WEBHOOK_URL"
