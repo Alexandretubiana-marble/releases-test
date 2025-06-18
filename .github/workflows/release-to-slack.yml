@@ -30,3 +30,13 @@ jobs:
         curl -X POST -H 'Content-type: application/json' \
           --data @slack-payload.json \
           ${{ secrets.SLACK_WEBHOOK_URL }}
+          
+    - name: Generate Slack payload
+      run: |
+        node scripts/slack-release.js
+      env:
+        RELEASE_TITLE: ${{ github.event.release.name }}
+        RELEASE_URL: ${{ github.event.release.html_url }}
+        RELEASE_BODY: ${{ github.event.release.body }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+    
