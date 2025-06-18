@@ -3,12 +3,21 @@ const fs = require("fs");
 const releaseTitle = process.env.RELEASE_TITLE;
 const releaseUrl = process.env.RELEASE_URL;
 const releaseBody = process.env.RELEASE_BODY;
-const repo = process.env.GITHUB_REPOSITORY; // e.g. "myorg/myrepo"
+const repo = process.env.GITHUB_REPOSITORY;
 
 function linkifyPRs(text) {
-  return text.replace(/#(\d+)/g, (match, prNumber) => {
-    return `<https://github.com/${repo}/pull/${prNumber}|#${prNumber}>`;
+  // Ne modifie pas les #123 déjà dans des liens [#123](url)
+  return text.replace(/(^|[^)\]])#(\d+)/g, (match, prefix, prNumber) => {
+    return `${prefix}<https://github.com/${repo}/pull/${prNumber}|#${prNumber}>`;
   });
+}
+
+function convertMarkdownToSlack(text) {
+  return text
+    .replace(/^### (.*)/gm, "*$1*")
+    .replace(/^## (.*)/gm, "*$1*")
+    .replace(/^# (.*)/gm, "*$1*")
+    .replace(/^[-*] (.*)/gm, "• $1");
 }
 
 function extractBlocksFromMarkdown(markdown) {
@@ -22,13 +31,14 @@ function extractBlocksFromMarkdown(markdown) {
         type: "image",
         image_url: imageMatch[1],
         alt_text: "Release image"
+        // Slack ne permet pas de forcer la taille, il faut que l’image soit déjà redimensionnée
       });
     } else if (line.trim() !== "") {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: linkifyPRs(line)
+          text: linkifyPRs(convertMarkdownToSlack(line))
         }
       });
     }
@@ -48,5 +58,4 @@ const blocks = [
   ...extractBlocksFromMarkdown(releaseBody)
 ];
 
-const payload = JSON.stringify({ blocks }, null, 2);
-fs.writeFileSync("slack-payload.json", payload);
+fs.writeFileSync("slack-payload.json", JSON.stringify({ blocks }, null, 2));
