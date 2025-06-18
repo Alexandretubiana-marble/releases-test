@@ -3,6 +3,13 @@ const fs = require("fs");
 const releaseTitle = process.env.RELEASE_TITLE;
 const releaseUrl = process.env.RELEASE_URL;
 const releaseBody = process.env.RELEASE_BODY;
+const repo = process.env.GITHUB_REPOSITORY; // e.g. "myorg/myrepo"
+
+function linkifyPRs(text) {
+  return text.replace(/#(\d+)/g, (match, prNumber) => {
+    return `<https://github.com/${repo}/pull/${prNumber}|#${prNumber}>`;
+  });
+}
 
 function extractBlocksFromMarkdown(markdown) {
   const lines = markdown.split('\n');
@@ -21,7 +28,7 @@ function extractBlocksFromMarkdown(markdown) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: line
+          text: linkifyPRs(line)
         }
       });
     }
