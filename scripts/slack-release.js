@@ -1,31 +1,109 @@
-name: Post Release Notes to Slack
+const fetch = require('node-fetch');
 
-on:
-  release:
-    types: [published]
+const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+const repo = process.env.GITHUB_REPOSITORY;
+const tag = process.env.RELEASE_TAG;
+const url = process.env.RELEASE_URL;
+const bodyRaw = process.env.RELEASE_BODY || '';
+const title = process.env.RELEASE_TITLE || tag;
 
-jobs:
-  slackNotify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+// Si la release est un hotfix, ne rien faire
+if (/hotfix/i.test(title) || /hotfix/i.test(bodyRaw)) {
+  console.log("Release ignored due to 'hotfix' keyword.");
+  process.exit(0);
+}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
+// Facultatif : map personnalisé pour rediriger certaines PR vers des liens spécifiques
+const customPRLinks = {
+  911: 'https://app.checkmarble.com/sign-in',
+  912: 'https://app.checkmarble.com/dashboard',
+};
 
-      - name: Install dependencies
-        run: npm install node-fetch@2
+function convertPRLinks(text) {
+  return text.replace(/#(\d+)/g, (_, num) => {
+    let target = customPRLinks[num];
+    if (!target || typeof target !== 'string') {
+      target = `https://github.com/${repo}/pull/${num}`;
+    }
+    return `<${target}|#${num}>`;
+  });
+}
 
-      - name: Run Slack release script
-        run: node scripts/slack-release.js
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_URL: ${{ github.event.release.html_url }}
-          RELEASE_BODY: ${{ github.event.release.body }}
-          RELEASE_NAME: ${{ github.event.release.name }}
-          RELEASE_TITLE: ${{ github.event.release.name || github.event.release.tag_name }}
+function convertHeaders(text) {
+  return text
+    .replace(/^### (.*)$/gm, '*$1*')
+    .replace(/^## (.*)$/gm, '*$1*')
+    .replace(/^# (.*)$/gm, '*$1*');
+}
+
+function convertLists(text) {
+  return text.replace(/^- /gm, '• ');
+}
+
+function extractImages(text) {
+  const imgRegex = /!\[.*?\]\((.*?)\)/g;
+  const urls = [];
+  let cleanedText = text.replace(imgRegex, (_, url) => {
+    urls.push(url);
+    return '';
+  });
+  return { cleanedText, urls };
+}
+
+// Format du message Slack
+const { cleanedText, urls } = extractImages(bodyRaw);
+const body = [convertHeaders, convertLists, convertPRLinks].reduce(
+  (text, fn) => fn(text),
+  cleanedText.trim()
+);
+
+const messageBlocks = [
+  {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `:rocket: *New release published!*\n*<https://github.com/${repo}|${repo}>*\n:arrow_right: *${title}*\n:link: <${url}>`,
+    },
+  },
+  {
+    type: 'divider',
+  },
+];
+
+if (body) {
+  messageBlocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: body,
+    },
+  });
+}
+
+urls.forEach((imgUrl) => {
+  messageBlocks.push({
+    type: 'image',
+    image_url: imgUrl,
+    alt_text: 'Release image',
+  });
+});
+
+// Envoi à Slack
+fetch(webhookUrl, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ blocks: messageBlocks }),
+})
+  .then((res) => {
+    if (!res.ok) {
+      throw new Error(`Slack API error: ${res.statusText}`);
+    }
+    return res.text();
+  })
+  .then((text) => {
+    console.log('Message sent to Slack:', text);
+  })
+  .catch((err) => {
+    console.error('Error sending to Slack:', err);
+    process.exit(1);
+  });
