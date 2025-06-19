@@ -1,61 +1,31 @@
-const fs = require("fs");
+name: Post Release Notes to Slack
 
-const releaseTitle = process.env.RELEASE_TITLE;
-const releaseUrl = process.env.RELEASE_URL;
-const releaseBody = process.env.RELEASE_BODY;
-const repo = process.env.GITHUB_REPOSITORY;
+on:
+  release:
+    types: [published]
 
-function linkifyPRs(text) {
-  // Ne modifie pas les #123 déjà dans des liens [#123](url)
-  return text.replace(/(^|[^)\]])#(\d+)/g, (match, prefix, prNumber) => {
-    return `${prefix}<https://github.com/${repo}/pull/${prNumber}|#${prNumber}>`;
-  });
-}
+jobs:
+  slackNotify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-function convertMarkdownToSlack(text) {
-  return text
-    .replace(/^### (.*)/gm, "*$1*")
-    .replace(/^## (.*)/gm, "*$1*")
-    .replace(/^# (.*)/gm, "*$1*")
-    .replace(/^[-*] (.*)/gm, "• $1");
-}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
 
-function extractBlocksFromMarkdown(markdown) {
-  const lines = markdown.split('\n');
-  const blocks = [];
+      - name: Install dependencies
+        run: npm install node-fetch@2
 
-  lines.forEach(line => {
-    const imageMatch = line.match(/!\[[^\]]*\]\((.*?)\)/);
-    if (imageMatch) {
-      blocks.push({
-        type: "image",
-        image_url: imageMatch[1],
-        alt_text: "Release image"
-        // Slack ne permet pas de forcer la taille, il faut que l’image soit déjà redimensionnée
-      });
-    } else if (line.trim() !== "") {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: linkifyPRs(convertMarkdownToSlack(line))
-        }
-      });
-    }
-  });
-
-  return blocks;
-}
-
-const blocks = [
-  {
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `:rocket: *New release:* <${releaseUrl}|${releaseTitle}>`
-    }
-  },
-  ...extractBlocksFromMarkdown(releaseBody)
-];
-
-fs.writeFileSync("slack-payload.json", JSON.stringify({ blocks }, null, 2));
+      - name: Run Slack release script
+        run: node scripts/slack-release.js
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TITLE: ${{ github.event.release.name || github.event.release.tag_name }}
