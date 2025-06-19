@@ -46,7 +46,7 @@ jobs:
             };
 
             return text.replace(/#(\d+)/g, (match, num) => {
-              const target = customPRLinks[num] || `https://github.com/${repo}/pull/${num}`;
+              const target = customPRLinks[num];
               return `<${target}|#${num}>`;
             });
           }
