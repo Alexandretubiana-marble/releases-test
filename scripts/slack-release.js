@@ -77,3 +77,59 @@ function formatMarkdownText(text, prBaseUrl) {
 }
 
 module.exports = { parseMarkdownToSlackBlocks, formatMarkdownText };
+
+const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+const repo = process.env.GITHUB_REPOSITORY;
+const release = {
+  name: process.env.RELEASE_NAME || process.env.RELEASE_TAG,
+  tag_name: process.env.RELEASE_TAG,
+  html_url: process.env.RELEASE_URL,
+  body: process.env.RELEASE_BODY
+};
+
+async function postReleaseToSlack(release) {
+  const prBaseUrl = `https://github.com/${repo}`;
+  const blocks = parseMarkdownToSlackBlocks(release.body, prBaseUrl);
+
+  const payload = {
+    blocks: [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `🚀 New release: ${release.name}`,
+          emoji: true,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `🔗 <${release.html_url}|View on GitHub>`,
+        },
+      },
+      { type: "divider" },
+      ...blocks,
+    ],
+  };
+
+  console.log("Sending to Slack with payload:", JSON.stringify(payload, null, 2));
+
+  const res = await fetch(slackWebhookUrl, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+  });
+
+  const text = await res.text();
+
+  if (res.status !== 200 || text !== "ok") {
+    throw new Error(`Slack API error: ${res.status} - ${text}`);
+  }
+}
+
+postReleaseToSlack(release).catch(err => {
+  console.error("❌ Failed to post release to Slack:", err);
+  process.exit(1);
+});
+
