@@ -3,52 +3,56 @@ const fetch = require('node-fetch');
 // Utilitaire : transforme un texte Markdown en tableau de blocs Slack avec images intercalées
 function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
   const blocks = [];
-  // Regex pour détecter les images Markdown : ![alt](url)
-  const regexImg = /!\[(.*?)\]\((.*?)\)/g;
+
+  // Combine ![alt](url) and <img ...> patterns
+  const imgRegex = /!\[(.*?)\]\((.*?)\)|<img [^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>/gi;
 
   let lastIndex = 0;
   let match;
 
-  while ((match = regexImg.exec(markdownText)) !== null) {
+  while ((match = imgRegex.exec(markdownText)) !== null) {
     const index = match.index;
 
     // Texte avant l'image
     if (index > lastIndex) {
       let textSegment = markdownText.substring(lastIndex, index).trim();
-      if (textSegment) {
+      if (textSegment.length > 0) {
         textSegment = formatMarkdownText(textSegment, prBaseUrl);
         blocks.push({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: textSegment,
+            text: textSegment.slice(0, 3000),
           },
         });
       }
     }
 
-    // Image trouvée
-    const alt = match[1];
-    const url = match[2];
-    blocks.push({
-      type: "image",
-      image_url: url,
-      alt_text: alt || "image",
-    });
+    // Image détectée
+    const url = match[2] || match[3];
+    const alt = match[1] || match[4] || "image";
 
-    lastIndex = regexImg.lastIndex;
+    if (url && url.startsWith("https://")) {
+      blocks.push({
+        type: "image",
+        image_url: url,
+        alt_text: alt,
+      });
+    }
+
+    lastIndex = imgRegex.lastIndex;
   }
 
   // Texte après la dernière image
   if (lastIndex < markdownText.length) {
     let textSegment = markdownText.substring(lastIndex).trim();
-    if (textSegment) {
+    if (textSegment.length > 0) {
       textSegment = formatMarkdownText(textSegment, prBaseUrl);
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: textSegment,
+          text: textSegment.slice(0, 3000),
         },
       });
     }
@@ -56,6 +60,7 @@ function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
 
   return blocks;
 }
+
 
 // Fonction de mise en forme texte Slack : titres en gras, puces, liens #PR
 function formatMarkdownText(text, prBaseUrl) {
