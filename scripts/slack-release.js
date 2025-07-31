@@ -1,38 +1,73 @@
 const fetch = require('node-fetch');
 
-// Utilitaire : transforme un texte Markdown en tableau de blocs Slack avec images intercalées
-function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
+// Supprimer les liens GitHub du texte
+function removeGitHubLinks(text, repo) {
+  const githubRegex = new RegExp(`https?://github\\.com/${repo.replace('/', '\\/')}/[\\w\\-./()#]+`, 'g');
+  return text.replace(githubRegex, '');
+}
+
+// Convertir Markdown vers Slack : titres, puces, liens, #PR, images
+function formatMarkdownText(text, prBaseUrl, repo) {
+  // Supprimer les liens GitHub sauf le principal
+  text = removeGitHubLinks(text, repo);
+
+  // Convertir les titres Markdown en gras
+  text = text.replace(/^### (.*)$/gm, '*$1*');
+  text = text.replace(/^## (.*)$/gm, '*$1*');
+  text = text.replace(/^# (.*)$/gm, '*$1*');
+
+  // Convertir les puces
+  text = text.replace(/^- /gm, '• ');
+
+  // Lien vers PR GitHub (type #123)
+  text = text.replace(/#(\d+)/g, (match, p1) => {
+    const url = `${prBaseUrl}/pull/${p1}`;
+    return `<${url}|#${p1}>`;
+  });
+
+  // Lien Markdown [texte](url)
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<$2|$1>');
+
+  return text;
+}
+
+// Convertit le texte markdown (avec images) en blocs Slack intercalés
+function parseMarkdownToSlackBlocks(markdownText, prBaseUrl, repo) {
   const blocks = [];
 
-  // Combine ![alt](url) and <img ...> patterns
-  const imgRegex = /!\[(.*?)\]\((.*?)\)|<img [^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>/gi;
+  // Gestion des balises <img ...>
+  const imgTagRegex = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>/gi;
+  // Gestion des images markdown ![alt](url)
+  const markdownImgRegex = /!\[(.*?)\]\((.*?)\)/g;
+
+  // Fusionner les deux
+  const combinedRegex = new RegExp(`${imgTagRegex.source}|${markdownImgRegex.source}`, 'gi');
 
   let lastIndex = 0;
   let match;
 
-  while ((match = imgRegex.exec(markdownText)) !== null) {
+  while ((match = combinedRegex.exec(markdownText)) !== null) {
     const index = match.index;
 
     // Texte avant l'image
     if (index > lastIndex) {
-      let textSegment = markdownText.substring(lastIndex, index).trim();
-      if (textSegment.length > 0) {
-        textSegment = formatMarkdownText(textSegment, prBaseUrl);
+      let segment = markdownText.slice(lastIndex, index).trim();
+      if (segment) {
+        const formatted = formatMarkdownText(segment, prBaseUrl, repo);
         blocks.push({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: textSegment.slice(0, 3000),
+            text: formatted,
           },
         });
       }
     }
 
-    // Image détectée
-    const url = match[2] || match[3];
-    const alt = match[1] || match[4] || "image";
-
-    if (url && url.startsWith("https://")) {
+    // Image (markdown ou HTML)
+    const url = match[1] || match[3];
+    const alt = match[2] || match[4] || 'Image';
+    if (url) {
       blocks.push({
         type: "image",
         image_url: url,
@@ -40,19 +75,19 @@ function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
       });
     }
 
-    lastIndex = imgRegex.lastIndex;
+    lastIndex = combinedRegex.lastIndex;
   }
 
   // Texte après la dernière image
   if (lastIndex < markdownText.length) {
-    let textSegment = markdownText.substring(lastIndex).trim();
-    if (textSegment.length > 0) {
-      textSegment = formatMarkdownText(textSegment, prBaseUrl);
+    let segment = markdownText.slice(lastIndex).trim();
+    if (segment) {
+      const formatted = formatMarkdownText(segment, prBaseUrl, repo);
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: textSegment.slice(0, 3000),
+          text: formatted,
         },
       });
     }
@@ -61,80 +96,57 @@ function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
   return blocks;
 }
 
+async function postReleaseToSlack() {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const releaseUrl = process.env.RELEASE_URL;
+  const releaseTag = process.env.RELEASE_TAG;
+  const releaseName = process.env.RELEASE_NAME || releaseTag;
+  const releaseBody = process.env.RELEASE_BODY;
 
-// Fonction de mise en forme texte Slack : titres en gras, puces, liens #PR
-function formatMarkdownText(text, prBaseUrl) {
-  // Remplacer titres #, ##, ### par gras
-  text = text.replace(/^### (.*)$/gm, '*$1*');
-  text = text.replace(/^## (.*)$/gm, '*$1*');
-  text = text.replace(/^# (.*)$/gm, '*$1*');
-
-  // Remplacer puces - par • (seulement en début de ligne)
-  text = text.replace(/^- /gm, '• ');
-
-  // Remplacer #123 par un lien vers PR
-  text = text.replace(/#(\d+)/g, (match, p1) => {
-    const url = `${prBaseUrl}/pull/${p1}`;
-    return `<${url}|#${p1}>`;
-  });
-
-  return text;
-}
-
-module.exports = { parseMarkdownToSlackBlocks, formatMarkdownText };
-
-const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
-const repo = process.env.GITHUB_REPOSITORY;
-const release = {
-  name: process.env.RELEASE_NAME || process.env.RELEASE_TAG,
-  tag_name: process.env.RELEASE_TAG,
-  html_url: process.env.RELEASE_URL,
-  body: process.env.RELEASE_BODY
-};
-
-async function postReleaseToSlack(release) {
   const prBaseUrl = `https://github.com/${repo}`;
-  const blocks = parseMarkdownToSlackBlocks(release.body, prBaseUrl);
 
-  const payload = {
-    blocks: [
-      {
-        type: "header",
-        text: {
-          type: "plain_text",
-          text: `🚀 New release: ${release.name}`,
-          emoji: true,
-        },
+  const blocks = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: `🚀 New release: ${releaseName}`,
+        emoji: true,
       },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `🔗 <${release.html_url}|View on GitHub>`,
-        },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `🔗 <${releaseUrl}|View on GitHub>`,
       },
-      { type: "divider" },
-      ...blocks,
-    ],
-  };
+    },
+    {
+      type: "divider",
+    },
+    ...parseMarkdownToSlackBlocks(releaseBody, prBaseUrl, repo),
+  ];
 
-  console.log("Sending to Slack with payload:", JSON.stringify(payload, null, 2));
+  const payload = { blocks };
 
-  const res = await fetch(slackWebhookUrl, {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: { "Content-Type": "application/json" },
-  });
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  const text = await res.text();
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Slack API error: ${res.status} - ${errorText}`);
+    }
 
-  if (res.status !== 200 || text !== "ok") {
-    throw new Error(`Slack API error: ${res.status} - ${text}`);
+    console.log("✅ Slack message sent successfully.");
+  } catch (err) {
+    console.error("❌ Failed to post release to Slack:", err);
+    process.exit(1);
   }
 }
 
-postReleaseToSlack(release).catch(err => {
-  console.error("❌ Failed to post release to Slack:", err);
-  process.exit(1);
-});
-
+postReleaseToSlack();
