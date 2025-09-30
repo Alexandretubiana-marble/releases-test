@@ -1,150 +1,148 @@
 const fetch = require('node-fetch');
 
-// Supprimer les liens GitHub du texte
-function removeGitHubLinks(text, repo) {
-  const githubRegex = new RegExp(`https?://github\\.com/${repo.replace('/', '\\/')}/[\\w\\-./()#]+`, 'g');
-  return text.replace(githubRegex, '');
-}
-
-// Convertir Markdown vers Slack : titres, puces, liens, #PR, images
-function formatMarkdownText(text, prBaseUrl) {
-  // Remplacer titres #, ##, ### par gras
-  text = text.replace(/^### (.*)$/gm, '*$1*');
-  text = text.replace(/^## (.*)$/gm, '*$1*');
-  text = text.replace(/^# (.*)$/gm, '*$1*');
-
-  // Remplacer puces - par • (seulement en début de ligne)
-  text = text.replace(/^- /gm, '• ');
-
-  // Supprimer la partie "(url)" des liens markdown [text](url)
-  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '$1');
-
-  // Remplacer #123 par un lien vers PR
-  text = text.replace(/#(\d+)/g, (match, p1) => {
-    const url = `${prBaseUrl}/pull/${p1}`;
-    return `<${url}|#${p1}>`;
-  });
-
-  return text;
-}
-
-
-// Convertit le texte markdown (avec images) en blocs Slack intercalés
-function parseMarkdownToSlackBlocks(markdownText, prBaseUrl, repo) {
+function parseMarkdownToSlackBlocks(markdownText, prBaseUrl) {
   const blocks = [];
 
-  // Gestion des balises <img ...>
-  const imgTagRegex = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>/gi;
-  // Gestion des images markdown ![alt](url)
-  const markdownImgRegex = /!\[(.*?)\]\((.*?)\)/g;
-
-  // Fusionner les deux
-  const combinedRegex = new RegExp(`${imgTagRegex.source}|${markdownImgRegex.source}`, 'gi');
-
-  let lastIndex = 0;
-  let match;
-
-  while ((match = combinedRegex.exec(markdownText)) !== null) {
-    const index = match.index;
-
-    // Texte avant l'image
-    if (index > lastIndex) {
-      let segment = markdownText.slice(lastIndex, index).trim();
-      if (segment) {
-        const formatted = formatMarkdownText(segment, prBaseUrl, repo);
-        blocks.push({
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: formatted,
-          },
-        });
-      }
-    }
-
-    // Image (markdown ou HTML)
-    const url = match[1] || match[3];
-    const alt = match[2] || match[4] || 'Image';
-    if (url) {
-      blocks.push({
-        type: "image",
-        image_url: url,
-        alt_text: alt,
-      });
-    }
-
-    lastIndex = combinedRegex.lastIndex;
-  }
-
-  // Texte après la dernière image
-  if (lastIndex < markdownText.length) {
-    let segment = markdownText.slice(lastIndex).trim();
-    if (segment) {
-      const formatted = formatMarkdownText(segment, prBaseUrl, repo);
+  // Fonction utilitaire pour ajouter un bloc texte
+  function addTextBlock(text) {
+    if (text && text.trim()) {
       blocks.push({
         type: "section",
-        text: {
-          type: "mrkdwn",
-          text: formatted,
-        },
+        text: { type: "mrkdwn", text }
       });
     }
+  }
+
+  // Regex pour Markdown images ![alt](url)
+  const regexImgMd = /!\[(.*?)\]\((.*?)\)/g;
+  // Regex pour balises HTML <img ...>
+  const regexImgHtml = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*>/gi;
+
+  let text = markdownText;
+  let cursor = 0;
+
+  // Fonction générique de parsing pour 2 types d’images
+  function processNextImage(match, url, alt, start, end) {
+    // Texte avant l’image
+    if (start > cursor) {
+      let segment = text.substring(cursor, start);
+      addTextBlock(formatMarkdownText(segment, prBaseUrl));
+    }
+    // Image
+    blocks.push({
+      type: "image",
+      image_url: url,
+      alt_text: alt || "image"
+    });
+    cursor = end;
+  }
+
+  // On combine les 2 regex dans un seul parcours
+  const matches = [];
+  let m;
+  while ((m = regexImgMd.exec(text)) !== null) {
+    matches.push({ start: m.index, end: regexImgMd.lastIndex, url: m[2], alt: m[1] });
+  }
+  while ((m = regexImgHtml.exec(text)) !== null) {
+    matches.push({ start: m.index, end: regexImgHtml.lastIndex, url: m[1], alt: m[2] });
+  }
+
+  // Trier les matches par ordre d’apparition
+  matches.sort((a, b) => a.start - b.start);
+
+  for (const img of matches) {
+    processNextImage(null, img.url, img.alt, img.start, img.end);
+  }
+
+  // Texte restant après la dernière image
+  if (cursor < text.length) {
+    let segment = text.substring(cursor);
+    addTextBlock(formatMarkdownText(segment, prBaseUrl));
   }
 
   return blocks;
 }
 
-async function postReleaseToSlack() {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-  const repo = process.env.GITHUB_REPOSITORY;
-  const releaseUrl = process.env.RELEASE_URL;
-  const releaseTag = process.env.RELEASE_TAG;
-  const releaseName = process.env.RELEASE_NAME || releaseTag;
-  const releaseBody = process.env.RELEASE_BODY;
+// Mise en forme Slack : titres, puces, liens, suppression GitHub
+function formatMarkdownText(text, prBaseUrl) {
+  // Titres -> gras
+  text = text.replace(/^### (.*)$/gm, '*$1*');
+  text = text.replace(/^## (.*)$/gm, '*$1*');
+  text = text.replace(/^# (.*)$/gm, '*$1*');
 
+  // Puces
+  text = text.replace(/^- /gm, '• ');
+
+  // Liens Markdown [text](url) -> Slack <url|text>
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<$2|$1>');
+
+  // PR refs #123 -> lien
+  text = text.replace(/#(\d+)/g, (match, p1) => {
+    const url = `${prBaseUrl}/pull/${p1}`;
+    return `<${url}|#${p1}>`;
+  });
+
+  // Supprimer tous les liens GitHub directs (hors PR déjà remplacées)
+  text = text.replace(/https?:\/\/github\.com\/[^\s)]+/g, '');
+
+  return text.trim();
+}
+
+// Fonction d’envoi
+async function postReleaseToSlack({
+  webhookUrl, repo, tag, url, body, name
+}) {
   const prBaseUrl = `https://github.com/${repo}`;
-
   const blocks = [
     {
       type: "header",
-      text: {
-        type: "plain_text",
-        text: `🚀 New release: ${releaseName}`,
-        emoji: true,
-      },
+      text: { type: "plain_text", text: `🚀 New release: ${name}`, emoji: true }
     },
     {
       type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `🔗 <${releaseUrl}|View on GitHub>`,
-      },
+      text: { type: "mrkdwn", text: `🔗 <${url}|View on GitHub>` }
     },
-    {
-      type: "divider",
-    },
-    ...parseMarkdownToSlackBlocks(releaseBody, prBaseUrl, repo),
+    { type: "divider" },
+    ...parseMarkdownToSlackBlocks(body, prBaseUrl)
   ];
 
   const payload = { blocks };
+  console.log("Sending to Slack with payload:", JSON.stringify(payload, null, 2));
 
-  try {
-    const res = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 
-    if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(`Slack API error: ${res.status} - ${errorText}`);
-    }
-
-    console.log("✅ Slack message sent successfully.");
-  } catch (err) {
-    console.error("❌ Failed to post release to Slack:", err);
-    process.exit(1);
+  if (!res.ok) {
+    throw new Error(`Slack API error: ${res.status} - ${await res.text()}`);
   }
+  console.log("✅ Successfully posted to Slack");
 }
 
-postReleaseToSlack();
+// Lancer si exécuté depuis GitHub Action
+if (require.main === module) {
+  const {
+    SLACK_WEBHOOK_URL,
+    GITHUB_REPOSITORY,
+    RELEASE_TAG,
+    RELEASE_URL,
+    RELEASE_BODY,
+    RELEASE_NAME
+  } = process.env;
+
+  postReleaseToSlack({
+    webhookUrl: SLACK_WEBHOOK_URL,
+    repo: GITHUB_REPOSITORY,
+    tag: RELEASE_TAG,
+    url: RELEASE_URL,
+    body: RELEASE_BODY,
+    name: RELEASE_NAME || RELEASE_TAG
+  }).catch(err => {
+    console.error("❌ Failed to post release to Slack:", err);
+    process.exit(1);
+  });
+}
+
+module.exports = { parseMarkdownToSlackBlocks, formatMarkdownText };
