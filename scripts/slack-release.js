@@ -7,29 +7,27 @@ function removeGitHubLinks(text, repo) {
 }
 
 // Convertir Markdown vers Slack : titres, puces, liens, #PR, images
-function formatMarkdownText(text, prBaseUrl, repo) {
-  // Supprimer les liens GitHub sauf le principal
-  text = removeGitHubLinks(text, repo);
-
-  // Convertir les titres Markdown en gras
+function formatMarkdownText(text, prBaseUrl) {
+  // Remplacer titres #, ##, ### par gras
   text = text.replace(/^### (.*)$/gm, '*$1*');
   text = text.replace(/^## (.*)$/gm, '*$1*');
   text = text.replace(/^# (.*)$/gm, '*$1*');
 
-  // Convertir les puces
+  // Remplacer puces - par • (seulement en début de ligne)
   text = text.replace(/^- /gm, '• ');
 
-  // Lien vers PR GitHub (type #123)
+  // Supprimer la partie "(url)" des liens markdown [text](url)
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '$1');
+
+  // Remplacer #123 par un lien vers PR
   text = text.replace(/#(\d+)/g, (match, p1) => {
     const url = `${prBaseUrl}/pull/${p1}`;
     return `<${url}|#${p1}>`;
   });
 
-  // Lien Markdown [texte](url)
-  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<$2|$1>');
-
   return text;
 }
+
 
 // Convertit le texte markdown (avec images) en blocs Slack intercalés
 function parseMarkdownToSlackBlocks(markdownText, prBaseUrl, repo) {
